@@ -29,6 +29,7 @@ public class CoreProtect22 implements CoreProtectProvider {
 
     private static final int RESULTS_PER_PAGE = 7;
     private static final int MAX_LOOKUP_TIME_SECONDS = 31536000; // 1 year
+    private static final int SECONDS_PER_DAY = 86400;
     private static final int ACTION_BREAK = 0;
     private static final int ACTION_PLACE = 1;
     private static final int ACTION_INTERACT = 2;
@@ -59,12 +60,12 @@ public class CoreProtect22 implements CoreProtectProvider {
 
         // RIGHT_CLICK on interact blocks: Use blockLookup API which queries exact coordinates
         // Filter to only action 2 (interactions/clicks)
-        List<String[]> allResults = api.blockLookup(block, MAX_LOOKUP_TIME_SECONDS);
-        
+        List<String[]> allResults = api.blockLookup(block, getLookupTimeSeconds());
+
         if (allResults == null || allResults.isEmpty()) {
             return new LookupResult(Collections.emptyList(), page, 1, false);
         }
-        
+
         // Filter to only interaction (2) actions
         List<String[]> filteredResults = new ArrayList<>();
         for (String[] result : allResults) {
@@ -145,12 +146,12 @@ public class CoreProtect22 implements CoreProtectProvider {
         // LEFT_CLICK: Use blockLookup API which queries exact coordinates
         // Filter to only actions 0 (break) and 1 (place)
         Block block = blockState.getLocation().getBlock();
-        List<String[]> allResults = api.blockLookup(block, MAX_LOOKUP_TIME_SECONDS);
-        
+        List<String[]> allResults = api.blockLookup(block, getLookupTimeSeconds());
+
         if (allResults == null || allResults.isEmpty()) {
             return new LookupResult(Collections.emptyList(), page, 1, false);
         }
-        
+
         // Filter to only break (0) and place (1) actions
         List<String[]> filteredResults = new ArrayList<>();
         for (String[] result : allResults) {
@@ -169,7 +170,22 @@ public class CoreProtect22 implements CoreProtectProvider {
         
         return buildBlockLookupResult(filteredResults, blockState.getLocation(), page);
     }
-    
+
+    private int getLookupTimeSeconds() {
+        InspectorPlugin plugin = InspectorPlugin.getPlugin();
+        if (plugin == null || plugin.getSettings() == null) {
+            return MAX_LOOKUP_TIME_SECONDS;
+        }
+
+        int configuredDays = plugin.getSettings().historyLimitDate;
+        if (configuredDays <= 0 || configuredDays == Integer.MAX_VALUE) {
+            return MAX_LOOKUP_TIME_SECONDS;
+        }
+
+        long configuredSeconds = (long) configuredDays * SECONDS_PER_DAY;
+        return (int) Math.min(MAX_LOOKUP_TIME_SECONDS, configuredSeconds);
+    }
+
     private LookupResult buildBlockLookupResult(List<String[]> results, Location location, int page) {
         List<Component> lines = new ArrayList<>();
         
@@ -282,11 +298,13 @@ public class CoreProtect22 implements CoreProtectProvider {
             int z = location.getBlockZ();
             
             int pageStart = (page - 1) * RESULTS_PER_PAGE;
-            
+            long timeThreshold = System.currentTimeMillis() / 1000L - getLookupTimeSeconds();
+
             // Get total count
             int totalCount = 0;
             String countQuery = "SELECT COUNT(*) as count FROM " + prefix + "container " +
-                    "WHERE wid = '" + worldId + "' AND x = '" + x + "' AND z = '" + z + "' AND y = '" + y + "' LIMIT 0, 1";
+                    "WHERE wid = '" + worldId + "' AND x = '" + x + "' AND z = '" + z + "' AND y = '" + y + "' " +
+                    "AND time > '" + timeThreshold + "' LIMIT 0, 1";
             try (ResultSet countResults = stmt.executeQuery(countQuery)) {
                 if (countResults.next()) {
                     totalCount = countResults.getInt("count");
@@ -297,6 +315,7 @@ public class CoreProtect22 implements CoreProtectProvider {
             // Query data
             String query = "SELECT time,user,action,type,data,amount FROM " + prefix + "container " +
                     "WHERE wid = '" + worldId + "' AND x = '" + x + "' AND z = '" + z + "' AND y = '" + y + "' " +
+                    "AND time > '" + timeThreshold + "' " +
                     "ORDER BY rowid DESC LIMIT " + pageStart + ", " + RESULTS_PER_PAGE;
             
             lines.add(buildHeader("Container Transactions", location));
